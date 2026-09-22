@@ -130,6 +130,8 @@ Then `GRAFANA_TARGET=oss` in front of any demo or audit. The datasource UIDs bec
 and the credential becomes a username and password; the metric names, labels, trace ids, recipes and house rules are
 identical. That is the "no lock-in" claim from Part 1, tested.
 
+**A shortcut worth knowing.** Grafana's open-source LLM app plugin embeds an MCP server inside Grafana itself, at `/api/plugins/grafana-llm-app/resources/mcp/grafana`. Point goose at that URL with a service-account token in the `Authorization` header and you can skip running `mcp-grafana` at all. The catch, measured on both my stacks: the embedded build is older (69 tools on Cloud, 59 on self-hosted, against 81) and has no Tempo tools, so it cannot do the trace pivots in Parts 3 and 5, and it has none of the `--disable-write` style policy you will want in Part 6. On self-hosted Grafana it also needs the `externalServiceAccounts` feature toggle and a Bearer token, or every call comes back 401. Good for a quick look; run the standalone server for the series.
+
 ## Step 6: make it repeatable with recipes (2 minutes)
 
 goose recipes are YAML files that carry the system prompt, the user prompt and the extensions, so an investigation is one command and lives in git next to the code. The repo ships four:
