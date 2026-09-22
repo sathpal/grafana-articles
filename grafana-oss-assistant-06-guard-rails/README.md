@@ -35,6 +35,15 @@ cover_image: img/cover.png
 | Pin the model and log the run | `GOOSE_MODEL`, recipes in git, `goose run --recipe` | An investigation you cannot replay is an anecdote |
 | Budget | goose's `--max-tool-repetitions`, and a per-run token cap at your provider | An assistant that loops on `query_prometheus` is an expensive way to find nothing |
 
+### Both assistants on one MCP server
+
+mcp-grafana can also hand a whole question to Grafana Cloud's managed Assistant, through a tool called `ask_assistant`. You will not see it in the default tool list, and the reasons are instructive:
+
+1. The `assistant` category is not in the default `--enabled-tools` list. You opt in by passing the full list plus `assistant` (`make mcp-assistant` in the demo repo).
+2. It registers only when write tools are enabled, because the managed Assistant can write to the stack and reads Loki server-side, so none of the MCP server's read-only or label-enforcement policies apply to what it reports back. The maintainers gate it as a write tool and log a warning when it is on.
+
+With it enabled, the open-source agent and the managed one sit side by side behind the same server, and "same question, both assistants" is one command. I asked the managed Assistant the paged-audit question through the bridge: it came back in 65 seconds with all six paused rules named, the lag by topic with the query quoted, and a correct "no samples" for a failure counter that had not incremented since the last restart. The transcript is in the demo repo under `docs/examples/`.
+
 ## What made the difference
 
 1. **Change annotations.** The single most valuable signal in all three incidents. Here the batch job and the chaos script wrote them; in production that is your CI/CD, your feature-flag service and your autoscaler. Without them, root cause is inference. With them, it is lookup.
