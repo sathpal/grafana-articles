@@ -63,7 +63,11 @@ Advanced > canonical link to the dev.to URL.
 | 7 | Dashboard and metric hygiene (`assistant/recipes/hygiene.yaml`) | Notice a NaN p95 weeks later | Checks every panel query against Mimir, flags histograms without buckets and windows shorter than 4x the scrape interval | A scheduled recipe instead of a person; this series lost an hour to exactly this |
 | 8 | Capacity sanity check | A spreadsheet, eventually | 300 articles x 10 variants x 20 KiB = 60 MiB into a 48 MiB tier, in the Part 4 verdict | The model is good at "does this fit", given the numbers |
 | 9 | Scheduled health report | Not done, or done badly | `goose run --recipe` from cron or CI | Recipes are files in git: no seat licence, no UI |
-| 10 | Regulated or air-gapped estates | Cloud assistants are not allowed | Same recipes with Ollama and a local model; prompts and telemetry never leave the network | Only possible because both halves are open source |
+| 10 | Regulated or air-gapped estates | Cloud assistants are not allowed | Same recipes against self-hosted Grafana OSS (`make oss-up`, tested below) and, with Ollama, a local model; prompts and telemetry never leave the network | Only possible because both halves are open source |
+
+Case 10 is not hypothetical. The same dashboard, alert rules, recipes and demos ran against a self-hosted Grafana OSS 13.2 (the `grafana/otel-lgtm` all-in-one, fed by the same Alloy) with nothing changed except three datasource UIDs and the credential:
+
+![The Publishing tier dashboard on self-hosted Grafana OSS 13.2, fed by the same Alloy pipeline as Grafana Cloud](img/06-oss-grafana-dashboard.png)
 
 Why open source, in efficiency terms: it runs where the work is (terminal, CI, cron); cost is a dial (a frontier model
 for the 02:00 root cause, a small or local model for the daily report); every call is in the MCP server log; the same

@@ -107,6 +107,22 @@ The first tool call must be `user_info`, and it must come back with your service
 
 (That screenshot is the expected shape of the run; the `user_info` and `list_datasources` results in it are the real ones from my stack.)
 
+## Self-hosted Grafana OSS instead of Cloud?
+
+Everything above works unchanged against a self-hosted, fully open-source Grafana. The demo repo ships an optional
+`grafana/otel-lgtm` container (Grafana OSS, Prometheus, Loki, Tempo) and a second Alloy config that sends the same
+telemetry to both. Three commands:
+
+```bash
+make oss-up        # Grafana OSS on localhost:3001, Alloy fans out to Cloud and local
+make grafana-oss   # same dashboard and alert rules, pushed locally
+make mcp-oss &     # a second mcp-grafana on :8310, basic-auth against the local Grafana
+```
+
+Then `GRAFANA_TARGET=oss` in front of any demo or audit. The datasource UIDs become `prometheus`, `loki` and `tempo`
+and the credential becomes a username and password; the metric names, labels, trace ids, recipes and house rules are
+identical. That is the "no lock-in" claim from Part 1, tested.
+
 ## Step 6: make it repeatable with recipes (2 minutes)
 
 goose recipes are YAML files that carry the system prompt, the user prompt and the extensions, so an investigation is one command and lives in git next to the code. The repo ships four:
