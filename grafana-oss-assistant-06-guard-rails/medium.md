@@ -1,0 +1,84 @@
+<!--
+MEDIUM PUBLISHING NOTES (delete this block before pasting)
+
+Recommended: publish on dev.to first, then in Medium use "Import a story"
+(medium.com/p/import) with the dev.to article URL. Medium pulls the rendered
+HTML, images and code blocks, and sets the canonical link to dev.to
+automatically, which avoids duplicate-content penalties.
+
+Manual alternative: paste the text below into the Medium editor. Medium
+converts #, ##, **bold**, `code`, ``` blocks and > quotes on paste. Upload the
+images from img/ where the placeholders are. Then set Story settings >
+Advanced > canonical link to the dev.to URL.
+-->
+
+# Guard rails: keeping an AI assistant safe, cheap and honest in Grafana Cloud (Part 6 of 6)
+
+**TL;DR** The assistant in this series solved three incidents. It also confidently reported a p95 of 4.75 seconds that did not exist, would have invented metric names without a rule against it, and had 81 tools when it needed 15. This part is the list of what went wrong, the controls that contain it, and the five things that made the whole thing work. Read it before you point an agent at production.
+
+## What it gets wrong without help
+
+**Metric names.** Left alone, a model writes `kafka_consumer_lag` or `jvm_heap_used` from memory. Neither exists. The house rule "start with `list_prometheus_metric_names`" is not decoration; the OTLP gateway's naming (dots to underscores, `_seconds` and `_milliseconds` suffixes, `_total` on counters) is exactly the detail it will not guess.
+
+**Histograms with the wrong buckets.** This one bit me, not the model. My first Java timer exported a histogram with only a `+Inf` bucket, and my Python and Go histograms used millisecond-shaped default buckets for values in seconds. `histogram_quantile` returned `NaN` in one case and a flat, fictional 4.75 s in the other. The assistant reported both as fact, because they *were* what Grafana said. Fix the instrumentation (explicit bucket boundaries, or record in ms with the default buckets). Do not ask the model to reason around a broken p95.
+
+**Range windows.** `rate(x[5m])` on a counter that started two minutes ago is empty. Tell it to widen before it concludes "no traffic".
+
+**Time zones.** The MCP server treats timestamps without an offset as UTC. Ask for relative ranges (`now-15m`) and let Grafana render local time.
+
+**Log volume.** `query_loki_logs` returns 100 lines by default; "find the error" can pull megabytes into the model's context and your bill. Prefer `query_loki_stats`, `format: compact`, and metric queries (`count_over_time`) before raw lines. Part 5's "32 errors, all on one service" was one metric query, not 32 log lines.
+
+**Alert state.** A paused rule looks healthy. If the question is "why did nobody get paged", make the assistant check `alerting_manage_rules` for `is_paused` and read the alert history, not just the current state.
+
+## Keeping it safe
+
+| Control | How | Why |
+| --- | --- | --- |
+| Read-only by default | `mcp-grafana --disable-write`, and a Viewer service account | Parts 3 and 4 needed no writes at all |
+| Scoped writes | An Editor token only for the session that does Part 5; house rule 5 ("confirm the exact object") | Annotations, alert rules and panels are the only things it should create |
+| Fewer tools | `--disable-oncall --disable-incident --disable-admin --disable-sift --disable-pyroscope ...` | 81 tools cost context and invite detours; this series used about 15 |
+| One server per team, not per laptop | `-t streamable-http`, `--server-auth-token`, behind your usual ingress | The token lives in one place, and the server's log is the audit trail of every Grafana API call |
+| No secrets in prompts | Credentials are environment variables of the server process | The model never sees the token, so it can never leak it into a transcript |
+| Pin the model and log the run | `GOOSE_MODEL`, recipes in git, `goose run --recipe` | An investigation you cannot replay is an anecdote |
+| Budget | goose's `--max-tool-repetitions`, and a per-run token cap at your provider | An assistant that loops on `query_prometheus` is an expensive way to find nothing |
+
+## What made the difference
+
+1. **Change annotations.** The single most valuable signal in all three incidents. Here the batch job and the chaos script wrote them; in production that is your CI/CD, your feature-flag service and your autoscaler. Without them, root cause is inference. With them, it is lookup.
+2. **One `service_name` across metrics, logs and traces.** Alloy sets it on container logs, the OpenTelemetry SDKs set it on spans and metrics, and the exporters get it from scrape labels. Every pivot the assistant made relied on it.
+3. **Trace context through Kafka.** The Python producer put `traceparent` in the message headers, the OpenTelemetry Java agent read it in the consumer, and the Go service passed it on to its own producer. That is why one trace id shows a 66-second wait and a 165-millisecond publish (Part 3), and why a red Java span sits inside a green trace (Part 5).
+4. **Six lines of house rules.** They turned a general agent into one that starts with `user_info`, refuses to assert without a query, and ends with a report in a fixed shape you can paste into an incident channel.
+5. **The exporters you would run anyway.** Kafka consumer lag and Redis evictions came from `kafka-exporter` and `redis_exporter`, scraped by Alloy. The assistant did not need anything bespoke, only the metrics an SRE would already have.
+
+## Where this leaves you
+
+An open-source agent plus the open-source Grafana MCP server gives you an assistant that reads the same Grafana Cloud your team reads, cites the queries it ran, and can be swapped, audited and budgeted like any other tool. It is not magic. It is a fast, tireless colleague who has read the runbook and will show you their work, provided you give them good telemetry and a short list of rules.
+
+Everything here is reproducible:
+
+```bash
+git clone https://github.com/sathpal/grafana-assistant-demo && cd grafana-assistant-demo
+cp .env.example .env                # Grafana Cloud OTLP creds + GRAFANA_URL + GRAFANA_SA_TOKEN
+make pub-up && make pub-seed        # the polyglot publishing tier, shipping to your stack
+make pub-grafana                    # dashboard + alert rules
+mcp-grafana -t streamable-http -address localhost:8300 &
+make pub-chaos S=batch-flood        # or no-ttl / batch-flood-media / db-write-fail
+goose run --recipe assistant/recipes/problem1.yaml
+```
+
+Scripted walkthrough of this part: `make demo P=6` in the [demo repo](https://github.com/sathpal/grafana-assistant-demo) (narrated, with pauses; `DEMO_AUTO=1` to record).
+
+## Further reading
+
+- [grafana/mcp-grafana](https://github.com/grafana/mcp-grafana): the server, its tool list, transports and flags
+- [block/goose](https://github.com/block/goose): the agent, providers, recipes and extensions
+- [Model Context Protocol](https://modelcontextprotocol.io): the standard both sides speak
+- [Grafana Cloud OTLP endpoint](https://grafana.com/docs/grafana-cloud/send-data/otlp/) and [Grafana Alloy](https://grafana.com/docs/alloy/latest/): how the telemetry got there
+- [OpenTelemetry Java agent](https://github.com/open-telemetry/opentelemetry-java-instrumentation), [OpenTelemetry Go](https://opentelemetry.io/docs/languages/go/), [OpenTelemetry Python](https://opentelemetry.io/docs/languages/python/): the instrumentation on each side of Kafka
+- [kafka-exporter](https://github.com/danielqsj/kafka_exporter) and [redis_exporter](https://github.com/oliver006/redis_exporter): the two Prometheus exporters that supplied lag and evictions
+- [Grafana Assistant](https://grafana.com/docs/grafana-cloud/machine-learning/assistant/): the managed alternative, which the same MCP server can also drive
+
+Thanks for reading all six. If you build one of these, I would like to hear which tool it reached for first.
+
+
+*Part of the series [An Open-Source AI Assistant for Grafana Cloud](https://github.com/sathpal/grafana-articles). Code and demos: [grafana-assistant-demo](https://github.com/sathpal/grafana-assistant-demo).*
